@@ -1,0 +1,126 @@
+<!doctype html>
+<!-- Dev-only test harness: runs Northstar against an in-memory fake Supabase.
+     Open /tools/mock-cloud.html?as=owner  or  ?as=contractor  (add &reset=1 to wipe).
+     Not deployed (see .vercelignore). -->
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Northstar (mock cloud)</title>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/styles.css">
+  <script>
+    (function () {
+      const qs = new URLSearchParams(location.search);
+      const as = qs.get('as') || 'owner';
+      const OWNER = 'owner@example.com';
+      const CONTRACTOR = 'editor@example.com';
+      if (qs.get('reset')) { localStorage.removeItem('mockdb'); localStorage.removeItem('mocksession'); localStorage.removeItem('northstar.cloud.v1'); }
+      const blank = () => ({ owner_state: [], tasks: [], portals: [], portal_items: [], files: [], push_subscriptions: [],
+        reviews: [{ id: 'r1', week_start: '2026-09-29', week_end: '2026-10-05', created_at: '2026-10-05T16:00:00Z',
+          content: '## The week in one line\nYou sold on **5 of 7 days** and earned 9,850 AED, but PawMinds barely moved.\n\n## Pushback\n- You spent 3h on PawMinds all week.\n- *Checkout* has been waiting 12 days. Chase it.\n\n## Next week: top 3\n1. Finish the offer copy — it blocks ads.\n2. Call the payment provider Monday.\n3. In bed by 11pm, 5 nights.' }] });
+      let db = JSON.parse(localStorage.getItem('mockdb') || 'null') || blank();
+      const save = () => localStorage.setItem('mockdb', JSON.stringify(db));
+      window.mockdb = () => db;
+      let session = JSON.parse(localStorage.getItem('mocksession') || 'null');
+      if (qs.get('login') === '1') { session = { access_token: 't', user: { email: as === 'owner' ? OWNER : CONTRACTOR } }; localStorage.setItem('mocksession', JSON.stringify(session)); }
+      const listeners = [];
+      const clone = (x) => JSON.parse(JSON.stringify(x));
+
+      class Q {
+        constructor(t) { this.t = t; this.f = []; this.op = 'select'; this.one = false; }
+        select() { return this; }
+        eq(k, v) { this.f.push((r) => r[k] === v); return this; }
+        ilike(k, v) { this.f.push((r) => String(r[k]).toLowerCase() === String(v).toLowerCase()); return this; }
+        in(k, a) { this.f.push((r) => a.includes(r[k])); return this; }
+        order(k, o) { this.ord = [k, o && o.ascending === false ? -1 : 1]; return this; }
+        limit() { return this; }
+        maybeSingle() { this.one = true; return this; }
+        single() { this.one = true; return this; }
+        upsert(rows) { this.op = 'upsert'; this.p = [].concat(rows); return this; }
+        insert(rows) { this.op = 'insert'; this.p = [].concat(rows); return this; }
+        update(p) { this.op = 'update'; this.p = p; return this; }
+        delete() { this.op = 'delete'; return this; }
+        then(res, rej) { try { res(this.run()); } catch (e) { rej(e); } }
+        run() {
+          const tbl = db[this.t];
+          const m = (r) => this.f.every((f) => f(r));
+          let data = null;
+          if (this.op === 'select') {
+            let rows = tbl.filter(m);
+            // crude RLS stand-in for the contractor
+            if (as === 'contractor' && this.t === 'portals') rows = rows.filter((r) => r.email === CONTRACTOR);
+            data = clone(rows);
+            if (this.ord) { const [k, d] = this.ord; data.sort((a, b) => (a[k] > b[k] ? 1 : a[k] < b[k] ? -1 : 0) * d); }
+          } else if (this.op === 'upsert') {
+            const key = this.t === 'push_subscriptions' ? 'endpoint' : 'id';
+            this.p.forEach((p) => { const i = tbl.findIndex((r) => r[key] === p[key]); if (i >= 0) Object.assign(tbl[i], clone(p)); else tbl.push(clone(p)); });
+            data = this.p;
+          } else if (this.op === 'insert') {
+            data = this.p.map((p) => { const row = Object.assign({ id: crypto.randomUUID(), created_at: new Date().toISOString(), status: 'open', requested_by: 'owner', sort: 0 }, clone(p)); tbl.push(row); return row; });
+          } else if (this.op === 'update') {
+            data = tbl.filter(m).map((r) => Object.assign(r, clone(this.p)));
+          } else if (this.op === 'delete') {
+            db[this.t] = tbl.filter((r) => !m(r));
+          }
+          save();
+          if (this.one) data = Array.isArray(data) ? data[0] || null : data;
+          return { data, error: null };
+        }
+      }
+
+      window.supabase = {
+        createClient: () => ({
+          auth: {
+            getSession: async () => ({ data: { session } }),
+            onAuthStateChange: (cb) => listeners.push(cb),
+            signInWithOtp: async ({ email }) => (email.includes('@') ? { error: null } : { error: { message: 'bad email' } }),
+            verifyOtp: async ({ email, token }) => {
+              if (token !== '123456') return { error: { message: 'Token has expired or is invalid' } };
+              session = { access_token: 't', user: { email } };
+              localStorage.setItem('mocksession', JSON.stringify(session));
+              return { error: null };
+            },
+            signOut: async () => { session = null; localStorage.removeItem('mocksession'); },
+          },
+          rpc: async (fn) => ({ data: fn === 'is_owner' ? session && session.user.email === OWNER : null, error: null }),
+          from: (t) => new Q(t),
+          storage: {
+            from: () => ({
+              upload: async () => ({ error: null }),
+              createSignedUrl: async (p) => ({ data: { signedUrl: 'about:blank#' + p }, error: null }),
+              remove: async () => ({ error: null }),
+            }),
+          },
+          channel: () => ({ on() { return this; }, subscribe() { return this; } }),
+        }),
+      };
+
+      const realFetch = window.fetch;
+      window.mockCalls = [];
+      window.fetch = async (url, opts) => {
+        if (String(url).startsWith('/api/')) {
+          window.mockCalls.push([url, opts && opts.body]);
+          const body = url === '/api/config' ? { supabaseUrl: 'https://mock.supabase.co', supabaseAnonKey: 'anon', vapidPublicKey: '', ai: true } : { ok: true, sent: 1, review: { id: 'r1' } };
+          return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        return realFetch(url, opts);
+      };
+    })();
+  </script>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="modal-root"></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="/js/util.js"></script>
+  <script src="/js/store.js"></script>
+  <script src="/js/ui.js"></script>
+  <script src="/js/cloud.js"></script>
+  <script src="/js/views-life.js"></script>
+  <script src="/js/views-hq.js"></script>
+  <script src="/js/views-portal.js"></script>
+  <script src="/js/views-home.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>

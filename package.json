@@ -1,0 +1,13 @@
+{
+  "name": "northstar",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Northstar: personal OS + PawMinds HQ",
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
+    "@supabase/supabase-js": "^2.117.2",
+    "web-push": "^3.6.7"
+  }
+}

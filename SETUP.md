@@ -1,5 +1,8 @@
 # Northstar — go-live checklist
 
+**Live app:** https://northstar-six-mu.vercel.app
+Every push to GitHub (`adam-belghazi/northstar`, branch `main`) redeploys automatically.
+
 ## Already done (by Claude)
 - [x] Supabase project **northstar** created (Mumbai, free plan)
 - [x] Database tables, security rules and file storage installed

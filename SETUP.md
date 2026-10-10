@@ -20,7 +20,7 @@ Open supabase.com/dashboard → project **northstar**.
    - Password: anything (you won't use it)
    - Tick **Auto Confirm User** → **Create user**
 2. **Authentication → Sign In / Providers**: switch **Allow new users to sign up** to **off** → **Save**.
-3. **Authentication → Emails → Templates → Magic Link**: replace the message body with the following, then **Save**:
+3. **Email template (only after step 7, custom SMTP):** Supabase only lets you edit emails once your own sender is connected. Then: **Authentication → Emails → Templates → Magic Link or OTP** → Source → replace the body with the following → **Save**. Until then, sign in with a password (see step 6).
    ```html
    <h2>Your Northstar code</h2>
    <p style="font-size:28px;letter-spacing:6px"><b>{{ .Token }}</b></p>
@@ -58,7 +58,8 @@ vercel.com → project **northstar**
 - Redirect URLs → **Add URL** → `<live link>/**`
 
 ### 6. Start using it
-1. Open the live link → enter your email → type the 6-digit code from your inbox.
+1. **Once, in Safari:** open the live link → **No password yet? Email me a sign-in link** → tap **Sign in** in the email → **Settings → Password for the Home Screen app** → save a password.
+   Then on iPhone: Share → **Add to Home Screen** → open Northstar from the icon → sign in with email + password. It stays signed in on that device.
 2. Choose **Start fresh**, **Import a backup**, or **Explore with sample data**.
 3. **iPhone:** open the link in **Safari** → Share → **Add to Home Screen** → open Northstar from the icon → **Settings → Turn on notifications → Send a test**.
 4. **Desktop:** in Chrome or Edge, click the install icon in the address bar to get it as an app.

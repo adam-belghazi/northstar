@@ -97,6 +97,15 @@
     const { error } = await Cloud.sb.auth.verifyOtp({ email, token, type: 'email' });
     if (error) throw new Error(/expired|invalid/i.test(error.message) ? 'That code is wrong or expired. Request a new one.' : error.message);
   };
+  Cloud.signInPassword = async (email, password) => {
+    const { error } = await Cloud.sb.auth.signInWithPassword({ email, password });
+    if (error) throw new Error(/invalid|credentials/i.test(error.message) ? 'Wrong email or password. No password yet? Use “Email me a link” once, then set one in Settings.' : error.message);
+  };
+  // the Home Screen app can't receive email links on iPhone, so it signs in with a password
+  Cloud.setPassword = async (password) => {
+    const { error } = await Cloud.sb.auth.updateUser({ password });
+    if (error) throw error;
+  };
   Cloud.signOut = () => {
     try { localStorage.removeItem('northstar.role'); } catch (e) { /* storage blocked */ }
     return Cloud.sb.auth.signOut();

@@ -82,6 +82,13 @@
               localStorage.setItem('mocksession', JSON.stringify(session));
               return { error: null };
             },
+            signInWithPassword: async ({ email, password }) => {
+              if (password !== 'test-password-1') return { error: { message: 'Invalid login credentials' } };
+              session = { access_token: 't', user: { email } };
+              localStorage.setItem('mocksession', JSON.stringify(session));
+              return { error: null };
+            },
+            updateUser: async () => ({ error: null }),
             signOut: async () => { session = null; localStorage.removeItem('mocksession'); },
           },
           rpc: async (fn) => ({ data: fn === 'is_owner' ? session && session.user.email === OWNER : null, error: null }),

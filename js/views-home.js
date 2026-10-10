@@ -60,7 +60,18 @@
       ? `<div class="banner">${icon('star', 16)}<span>This is sample data so you can see how everything works. Clear it in Settings when you're ready to add your own.</span><a class="btn sm" href="#/settings">Settings</a></div>`
       : '';
 
+    // this-device prompts: install from Safari, then switch notifications on with one tap
+    const cloud = NS.Cloud.mode === 'cloud' && NS.Cloud.role === 'owner';
+    if (cloud && ui.pushState === null) refreshPushState();
+    const device =
+      cloud && NS.isIOS() && !NS.isStandalone()
+        ? `<div class="banner">${icon('alert', 16)}<span><b>You're in Safari.</b> Notifications and staying signed in only work in the Home Screen app: tap Share → <b>Add to Home Screen</b>, open Northstar from the icon, and sign in with your password (set one in Settings first).</span><a class="btn sm" href="#/settings">Settings</a></div>`
+        : cloud && ui.pushState === 'off' && !ui.pushNag
+          ? `<div class="card push-card"><div class="grow"><div class="eyebrow">${icon('star', 13)} This device</div><b>Turn on notifications</b><p class="muted small">Walk-in reminders, your 8:30 plan, the evening check-in and Sunday's review.</p></div>
+              <div class="btn-row"><button type="button" class="btn pri" data-a="pushOn">Turn on</button><button type="button" class="btn ghost sm" data-a="pushLater">Later</button></div></div>`
+          : '';
     return `${NS.head(`${greet}${name}`, NS.parse(T).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }))}
+      ${device}
       ${sample}
       ${NS.focusCard()}
       <div class="grid">${NS.doorsHomeCard()}</div>
@@ -106,7 +117,7 @@
   ui.pushState = null;
   const refreshPushState = async () => {
     ui.pushState = await NS.Cloud.pushState().catch(() => 'unsupported');
-    if (ui.route === 'settings') NS.render();
+    if (ui.route === 'settings' || ui.route === 'home') NS.render();
   };
 
   V.settings = () => {
@@ -140,6 +151,12 @@
           <p class="muted small">Signed in as <b>${esc(Cl.user.email)}</b> (owner).</p>
           <div class="btn-row">${NS.syncBadge()}<button type="button" class="btn ghost" data-a="signOut">Sign out</button></div>
           ${Cl.error ? `<p class="red small">${esc(Cl.error)}</p>` : ''}
+          <form id="pwForm" class="pw-form" onsubmit="return false">
+            <div class="fl" style="margin:18px 0 6px">Password for the Home Screen app</div>
+            <p class="dim small" style="margin-bottom:10px">On iPhone, email links open in Safari, not the Home Screen app. Set a password here once, then sign in with it from the Home Screen icon. It stays signed in after that.</p>
+            <div class="btn-row"><input name="pw" type="password" autocomplete="new-password" placeholder="New password (8+ characters)" style="flex:1 1 200px">
+            <button type="button" class="btn" data-a="setPassword">Save password</button></div>
+          </form>
         </div>
         <div class="card"><h3>Weekly review</h3>
           <p class="muted small">Written by Claude every Sunday around 8pm (UAE time) and pushed to your phone. You can also run it any time from Life → Weekly review.</p>
@@ -188,6 +205,19 @@
       NS.toast(e.message);
     }
     refreshPushState();
+  };
+  A.pushLater = () => { ui.pushNag = true; NS.render(); };
+  A.setPassword = async () => {
+    const f = document.getElementById('pwForm');
+    const pw = f.elements.pw.value;
+    if (pw.length < 8) return NS.toast('Use at least 8 characters');
+    try {
+      await NS.Cloud.setPassword(pw);
+      f.elements.pw.value = '';
+      NS.toast('Password saved. Use it to sign in from the Home Screen app.');
+    } catch (e) {
+      NS.toast(e.message);
+    }
   };
   A.pushOff = async () => {
     await NS.Cloud.disablePush().catch((e) => NS.toast(e.message));

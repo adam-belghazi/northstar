@@ -248,27 +248,47 @@
     document.getElementById('app').innerHTML = `<div class="screen"><div class="screen-card">${wordmark('#')}${inner}</div></div>`;
   };
 
-  ui.login = { step: 'email', email: '', busy: false, error: '' };
+  // Sign-in: password first (works inside the iPhone Home Screen app), email link as the fallback.
+  ui.login = { step: 'password', email: '', busy: false, error: '' };
   const renderLogin = () => {
     const L = ui.login;
-    screen(
-      L.step === 'email'
-        ? `<h1>Sign in</h1><p class="muted">Enter your email and we'll send you a one-time code.</p>
-          <form id="loginForm" class="login-form">
-            <label class="fld"><span class="fl">Email</span><input name="email" type="email" autocomplete="email" required value="${esc(L.email)}" placeholder="you@example.com"></label>
-            ${L.error ? `<p class="red small">${esc(L.error)}</p>` : ''}
-            <button class="btn pri block" ${L.busy ? 'disabled' : ''}>${L.busy ? 'Sending…' : 'Send code'}</button>
-          </form>`
-        : `<h1>Check your email</h1><p class="muted">We sent a code to <b>${esc(L.email)}</b>. Type it below, or tap the link in the email.</p>
-          <form id="loginForm" class="login-form">
-            <label class="fld"><span class="fl">Code</span><input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="10" required class="code-in" placeholder="123456"></label>
-            ${L.error ? `<p class="red small">${esc(L.error)}</p>` : ''}
-            <button class="btn pri block" ${L.busy ? 'disabled' : ''}>${L.busy ? 'Checking…' : 'Sign in'}</button>
-            <button type="button" class="btn ghost block" data-a="loginBack">Use a different email</button>
-          </form>`
-    );
+    const err = L.error ? `<p class="red small">${esc(L.error)}</p>` : '';
+    const emailIn = `<label class="fld"><span class="fl">Email</span><input name="email" type="email" autocomplete="email" required value="${esc(L.email)}" placeholder="you@example.com"></label>`;
+    const safari = NS.isIOS() && !NS.isStandalone()
+      ? `<p class="dim small">You're in Safari. For notifications and staying signed in, use Northstar from your Home Screen (Share → Add to Home Screen).</p>`
+      : '';
+    let inner;
+    if (L.step === 'password') {
+      inner = `<h1>Sign in</h1><p class="muted">You only do this once per device. Northstar remembers you after that.</p>
+        <form id="loginForm" class="login-form">${emailIn}
+          <label class="fld"><span class="fl">Password</span><input name="password" type="password" autocomplete="current-password" required></label>
+          ${err}<button class="btn pri block" ${L.busy ? 'disabled' : ''}>${L.busy ? 'Signing in…' : 'Sign in'}</button>
+          <button type="button" class="btn ghost block" data-a="loginStep" data-v="email">No password yet? Email me a sign-in link</button>
+        </form>${safari}`;
+    } else if (L.step === 'email') {
+      inner = `<h1>Email link</h1><p class="muted">We'll email you a sign-in link. Use it once, then set a password in Settings so the Home Screen app can sign in.</p>
+        <form id="loginForm" class="login-form">${emailIn}${err}
+          <button class="btn pri block" ${L.busy ? 'disabled' : ''}>${L.busy ? 'Sending…' : 'Email me a link'}</button>
+          <button type="button" class="btn ghost block" data-a="loginStep" data-v="password">Back to password</button>
+        </form>`;
+    } else {
+      inner = `<h1>Check your email</h1>
+        <ol class="steps"><li>Open the email we sent to <b>${esc(L.email)}</b> and tap <b>Sign in</b>. On iPhone it opens in Safari. That's expected.</li>
+          <li>In Northstar, go to <b>Settings → Password for the Home Screen app</b> and set one.</li>
+          <li>Open Northstar from your Home Screen and sign in with that password.</li></ol>
+        <form id="loginForm" class="login-form">
+          <label class="fld"><span class="fl">Got a 6-digit code instead? Type it here</span><input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="10" class="code-in" placeholder="123456"></label>
+          ${err}<button class="btn pri block" ${L.busy ? 'disabled' : ''}>${L.busy ? 'Checking…' : 'Sign in with code'}</button>
+          <button type="button" class="btn ghost block" data-a="loginStep" data-v="password">Back to password</button>
+        </form>`;
+    }
+    screen(inner);
     const first = document.querySelector('#loginForm input');
-    first && first.focus();
+    first && !first.value && first.focus();
+  };
+  const signedIn = () => {
+    location.replace('/#/home');
+    location.reload();
   };
   A.loginSubmit = async () => {
     const L = ui.login;
@@ -276,18 +296,23 @@
     L.error = '';
     L.busy = true;
     try {
-      if (L.step === 'email') {
+      if (L.step === 'password') {
+        L.email = form.elements.email.value.trim();
+        const pw = form.elements.password.value;
+        renderLogin();
+        await Cloud.signInPassword(L.email, pw);
+        return signedIn();
+      } else if (L.step === 'email') {
         L.email = form.elements.email.value.trim();
         renderLogin();
         await Cloud.sendCode(L.email);
         L.step = 'code';
       } else {
         const code = form.elements.code.value.replace(/\s/g, '');
+        if (!code) throw new Error('Tap the link in the email, or type the code if there is one');
         renderLogin();
         await Cloud.verifyCode(L.email, code);
-        location.replace('/#/home');
-        location.reload();
-        return;
+        return signedIn();
       }
     } catch (e) {
       L.error = e.message;
@@ -295,8 +320,8 @@
     L.busy = false;
     renderLogin();
   };
-  A.loginBack = () => {
-    Object.assign(ui.login, { step: 'email', error: '' });
+  A.loginStep = (el) => {
+    Object.assign(ui.login, { step: el.dataset.v, error: '' });
     renderLogin();
   };
 
@@ -347,6 +372,8 @@
   // ---------- boot ----------
   const boot = async () => {
     NS.applyTheme();
+    // ask the browser not to clear Northstar's storage, so this device stays signed in
+    if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
     document.getElementById('app').innerHTML = '<div class="screen"><div class="wordmark pulse">NORTHSTAR</div></div>';
     await Cloud.init();
     window.addEventListener('hashchange', route);

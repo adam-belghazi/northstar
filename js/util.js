@@ -114,3 +114,9 @@ window.NS = window.NS || {};
   NS.icon = (n, s = 18) =>
     `<svg class="ic" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n] || ''}</svg>`;
 })(window.NS);
+
+// device checks used for iPhone Home Screen hints
+(function (NS) {
+  NS.isIOS = () => /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  NS.isStandalone = () => (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+})(window.NS);

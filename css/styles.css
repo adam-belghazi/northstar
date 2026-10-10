@@ -726,3 +726,8 @@ input[type='checkbox']:checked { animation: tick 0.25s ease; }
   .ci { padding: 4px 16px; }
 }
 #dupes:empty { display: none; }
+.push-card { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; margin-bottom: var(--gap); border-left: 3px solid var(--accent); }
+.push-card .grow { flex: 1 1 240px; }
+.push-card p { margin-top: 4px; }
+.steps { margin: 4px 0 6px; padding-left: 20px; color: var(--muted); display: flex; flex-direction: column; gap: 8px; font-size: 14px; }
+.steps b { color: var(--text); }

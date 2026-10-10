@@ -10,6 +10,12 @@
     { r: 'life/checkin', label: 'Daily check-in', icon: 'checkin', badge: () => (S.state.checkins[NS.today()] ? '' : '<span class="nbadge" title="Not logged today"></span>') },
     { r: 'life/review', label: 'Weekly review', icon: 'star' },
     { r: 'life/wishlist', label: 'Gear wishlist', icon: 'bag' },
+    { h: 'HQ · Door-to-door' },
+    { r: 'doors/today', label: 'Today at the doors', icon: 'door', badge: () => (NS.D.dueTexts().length || NS.D.walkIns(NS.today()).length ? '<span class="nbadge" title="Walk-ins or texts today"></span>' : '') },
+    { r: 'doors/list', label: 'Doors', icon: 'grid' },
+    { r: 'doors/texts', label: 'Texts', icon: 'ext' },
+    { r: 'doors/calendar', label: 'Doors calendar', icon: 'cal' },
+    { r: 'doors/setup', label: 'Setup', icon: 'sliders' },
     { h: 'HQ · PawMinds' },
     { r: 'hq/pipeline', label: 'Pipeline', icon: 'kanban' },
     { r: 'hq/readiness', label: 'Launch readiness', icon: 'flag' },
@@ -19,17 +25,20 @@
   ];
   const SUBNAV = {
     life: [['life/goals', 'Goals'], ['life/review', 'Review'], ['life/wishlist', 'Wishlist']],
+    doors: [['doors/today', 'Today'], ['doors/list', 'Doors'], ['doors/texts', 'Texts'], ['doors/calendar', 'Calendar'], ['doors/setup', 'Setup']],
     hq: [['hq/pipeline', 'Pipeline'], ['hq/readiness', 'Readiness'], ['hq/team', 'Team'], ['hq/subs', 'Subs'], ['hq/portals', 'Portals']],
   };
   const TABS = [
     { r: 'home', label: 'Today', icon: 'home', match: (r) => r === 'home' },
     { r: 'life/goals', label: 'Life', icon: 'target', match: (r) => r.startsWith('life/') && r !== 'life/checkin' },
     { r: 'life/checkin', label: 'Check-in', icon: 'checkin', match: (r) => r === 'life/checkin' },
+    { r: 'doors/today', label: 'Doors', icon: 'door', match: (r) => r.startsWith('doors/'), dot: () => NS.D.dueTexts().length > 0 },
     { r: 'hq/pipeline', label: 'HQ', icon: 'kanban', match: (r) => r.startsWith('hq/') },
   ];
   const VIEWS = {
     home: 'home', 'life/goals': 'goals', 'life/checkin': 'checkin', 'life/review': 'review', 'life/wishlist': 'wishlist',
     'hq/pipeline': 'pipeline', 'hq/readiness': 'readiness', 'hq/team': 'team', 'hq/subs': 'subs', 'hq/portals': 'portals', settings: 'settings',
+    'doors/today': 'doorsToday', 'doors/list': 'doorsList', 'doors/texts': 'doorsTexts', 'doors/calendar': 'doorsCalendar', 'doors/setup': 'doorsSetup',
   };
   const navActive = (r) => ui.route === r || (r === 'hq/portals' && ui.route.startsWith('hq/portal/'));
 
@@ -48,13 +57,13 @@
     const sec = ui.route.split('/')[0];
     const items = ui.route !== 'life/checkin' && SUBNAV[sec];
     if (!items) return '';
-    return `<nav class="subnav" aria-label="${sec === 'hq' ? 'HQ' : 'Life'} pages">${items
+    return `<nav class="subnav" aria-label="${sec === 'hq' ? 'HQ' : sec === 'doors' ? 'Door-to-door' : 'Life'} pages">${items
       .map(([r, l]) => `<a href="#/${r}" class="${navActive(r) ? 'on' : ''}">${l}</a>`)
       .join('')}</nav>`;
   };
   const tabsHtml = () =>
     `<nav class="tabbar" aria-label="Main">${TABS.map(
-      (t) => `<a href="#/${t.r}" class="${t.match(ui.route) ? 'on' : ''}">${icon(t.icon, 21)}<span>${t.label}</span>${t.r === 'life/checkin' && !S.state.checkins[NS.today()] ? '<i class="tab-dot"></i>' : ''}</a>`
+      (t) => `<a href="#/${t.r}" class="${t.match(ui.route) ? 'on' : ''}">${icon(t.icon, 21)}<span>${t.label}</span>${(t.r === 'life/checkin' && !S.state.checkins[NS.today()]) || (t.dot && t.dot()) ? '<i class="tab-dot"></i>' : ''}</a>`
     ).join('')}</nav>`;
 
   NS.refreshNav = () => {
@@ -187,6 +196,7 @@
     if (!ui.draft) return;
     NS.setPath(ui.draft, el.dataset.d, el.type === 'checkbox' ? el.checked : el.value);
     if (el.type === 'checkbox' && document.getElementById('subed')) NS.refreshDraft();
+    if (el.dataset.rerender && NS.refreshCiEditor) NS.refreshCiEditor();
   };
   document.addEventListener('input', (e) => {
     const el = e.target;

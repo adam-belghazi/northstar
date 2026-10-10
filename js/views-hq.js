@@ -262,7 +262,7 @@
     const p = total / amt;
     const usd = S.state.settings.currency === 'USD';
     return `<div class="card gate">
-      <h3>${icon('coins', 15)} Money gate</h3>
+      <div class="card-h"><h3>${icon('coins', 15)} Money gate</h3><button type="button" class="btn ghost sm" data-a="editGate">${icon('edit', 13)}<span>Edit</span></button></div>
       <div class="gate-row">
         ${NS.ring(p, { size: compact ? 96 : 120, color: 'var(--p1)', label: NS.pct(Math.min(p, 1)) })}
         <div>
@@ -328,7 +328,7 @@
         <div class="stack-col">${NS.gateCard()}
           <div class="card"><h3>Income log</h3>
             <div class="list">${income.length
-              ? income.map((i) => `<div class="li static"><span class="grow"><span class="li-t">${esc(i.note || 'Income')}</span><span class="li-s">${NS.fmtDate(i.date)} · ${i.source === 'checkin' ? 'from check-in' : 'manual'}</span></span>
+              ? income.map((i) => `<div class="li static"><span class="grow"><span class="li-t">${esc(i.note || 'Income')}</span><span class="li-s">${NS.fmtDate(i.date)} · ${i.source === 'checkin' ? 'from check-in' : i.source === 'door' ? 'from Doors' : 'manual'}</span></span>
                   <b class="num">${NS.fmtMoney(i.amount, i.currency || 'AED')}</b>${i.source === 'manual' ? `<button type="button" class="btn ghost sm icon-only" data-a="editIncome" data-id="${i.id}" aria-label="Edit">${icon('edit', 14)}</button>` : ''}</div>`).join('')
               : '<div class="dim small">Log door-to-door earnings in the daily check-in, or add income here.</div>'}</div></div>
         </div>
@@ -345,6 +345,23 @@
           ${done.length ? `<h3 style="margin-top:24px">Built ${icon('check', 14)} <span class="dim">${done.length}</span></h3><div class="list">${done.map((t) => row(t)).join('')}</div>` : ''}
         </div>
       </div>`;
+  };
+
+  const gateFields = [
+    { k: 'gateAmount', label: 'Target (AED)', type: 'number', hint: 'How much you need before PawMinds can run on money alone.' },
+    { k: 'gateLabel', label: 'What it unlocks', ph: 'e.g. Run PawMinds ads' },
+  ];
+  A.editGate = (el, e) => {
+    e && e.preventDefault();
+    NS.openModal({
+      title: 'Money gate',
+      body: NS.fields(gateFields, S.state.settings) + `<p class="dim small" style="margin-top:10px">Progress = door deposits + other earnings in your check-ins + income you log here. Now: <b>${NS.fmtMoney(S.gateTotal(), 'AED')}</b>.</p>`,
+      onSave: (form) => {
+        const v = NS.readForm(form, gateFields);
+        if (!(v.gateAmount > 0)) { NS.toast('Enter a target above 0'); return false; }
+        Object.assign(S.state.settings, v);
+      },
+    });
   };
 
   const incomeFields = [

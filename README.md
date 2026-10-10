@@ -10,10 +10,11 @@ Personal OS (**Life**) + PawMinds headquarters (**HQ**).
 |---|---|
 | `index.html`, `css/`, `js/` | The app. Plain HTML/CSS/JS, no build step |
 | `js/store.js` | Data model, sample data, readiness and critical-path logic |
-| `js/cloud.js` | Supabase auth, sync, files, push, reviews |
-| `js/views-*.js` | Pages (Life, HQ, portals, home and settings) |
+| `js/cloud.js` | Supabase auth, sync (owner state, tasks, doors), files, push, reviews, offline start |
+| `js/doors.js` | Door-to-door rules: statuses, WhatsApp templates, text queue (day 2/5/9), walk-ins, clashes |
+| `js/views-*.js` | Pages (Life, HQ, Door-to-door, portals, home and settings) |
 | `js/app.js` | Shell, routing, login, first run |
-| `api/` | Vercel serverless functions: config, invite, activity, notify (daily cron), weekly-review (Sunday cron, Claude Opus 5.5) |
+| `api/` | Vercel functions: config, invite, activity, notify (daily cron), weekly-review (Sunday cron, Claude Opus 5.5), doors-tick (every 5 min via Supabase pg_cron), calendar (private iPhone calendar feed) |
 | `supabase/schema.sql` | Tables, row-level security, storage bucket |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Installable app + push |
 | `tools/serve.ps1` | Local preview server (`powershell -File tools/serve.ps1`) |

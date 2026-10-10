@@ -12,7 +12,7 @@
     portal: null, // contractor's own portal row
     status: 'local', // 'local' | 'synced' | 'saving' | 'error' | 'offline'
     error: '',
-    synced: { state: null, tasks: {}, portals: {} },
+    synced: { state: null, tasks: {}, doors: {}, portals: {} },
   });
 
   // Key-sorted JSON so Postgres jsonb (which reorders keys) compares equal to local objects.
@@ -29,12 +29,20 @@
     if (location.protocol === 'file:') return;
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
     let cfg;
+    // remember the public config so the app still opens (on cached data) with no signal
     try {
       const r = await fetch('/api/config', { cache: 'no-store' });
-      if (!r.ok) return;
-      cfg = await r.json();
+      if (r.ok) {
+        cfg = await r.json();
+        try { localStorage.setItem('northstar.config', JSON.stringify(cfg)); } catch (e) { /* storage blocked */ }
+      }
     } catch (e) {
-      return;
+      /* offline */
+    }
+    if (!cfg) {
+      try { cfg = JSON.parse(localStorage.getItem('northstar.config') || 'null'); } catch (e) { cfg = null; }
+      if (!cfg) return;
+      Cloud.offlineBoot = true;
     }
     if (!cfg.supabaseUrl || !cfg.supabaseAnonKey || !window.supabase) return;
     Cloud.config = cfg;
@@ -53,15 +61,25 @@
   };
 
   Cloud.resolveRole = async () => {
+    const remember = (role) => {
+      try { localStorage.setItem('northstar.role', role); } catch (e) { /* storage blocked */ }
+      return (Cloud.role = role);
+    };
     const { data: isOwner, error } = await Cloud.sb.rpc('is_owner');
-    if (error) throw error;
-    if (isOwner) return (Cloud.role = 'owner');
+    if (error) {
+      // no signal: trust the role from the last successful sign-in on this device
+      let cached = '';
+      try { cached = localStorage.getItem('northstar.role') || ''; } catch (e) { /* storage blocked */ }
+      if (cached === 'owner') return (Cloud.role = 'owner');
+      throw error;
+    }
+    if (isOwner) return remember('owner');
     const { data: portal } = await Cloud.sb.from('portals').select('*').maybeSingle();
     if (portal) {
       Cloud.portal = portal;
-      return (Cloud.role = 'contractor');
+      return remember('contractor');
     }
-    return (Cloud.role = 'none');
+    return remember('none');
   };
 
   // ---------- auth ----------
@@ -79,7 +97,10 @@
     const { error } = await Cloud.sb.auth.verifyOtp({ email, token, type: 'email' });
     if (error) throw new Error(/expired|invalid/i.test(error.message) ? 'That code is wrong or expired. Request a new one.' : error.message);
   };
-  Cloud.signOut = () => Cloud.sb.auth.signOut();
+  Cloud.signOut = () => {
+    try { localStorage.removeItem('northstar.role'); } catch (e) { /* storage blocked */ }
+    return Cloud.sb.auth.signOut();
+  };
 
   Cloud.token = async () => {
     const { data } = await Cloud.sb.auth.getSession();
@@ -97,8 +118,15 @@
   };
 
   // ---------- owner data sync ----------
+  // Set whenever there are local changes the cloud hasn't confirmed yet (e.g. doors logged offline).
+  const DIRTY = 'northstar.cloud.dirty';
+  const setDirty = (on) => {
+    try { on ? localStorage.setItem(DIRTY, '1') : localStorage.removeItem(DIRTY); } catch (e) { /* storage blocked */ }
+  };
+  const isDirty = () => { try { return !!localStorage.getItem(DIRTY); } catch (e) { return false; } };
+
   const ownerPart = () => {
-    const { tasks, ...rest } = S.state;
+    const { tasks, doors, ...rest } = S.state;
     return rest;
   };
   const assigneeOf = (t) => (t.ownerId && t.ownerId !== 'me' ? t.ownerId : null);
@@ -111,21 +139,37 @@
     Cloud.synced = {
       state: stable(ownerPart()),
       tasks: Object.fromEntries(S.state.tasks.map((t) => [t.id, stable(t)])),
+      doors: Object.fromEntries(S.state.doors.map((d) => [d.id, stable(d)])),
       portals: Object.fromEntries(portalRows().map((p) => [p.id, stable(p)])),
     };
   };
 
   // Returns false when the cloud has never been set up (first run).
   Cloud.loadOwner = async () => {
-    const [st, tk, pt] = await Promise.all([
+    const [st, tk, dr, pt] = await Promise.all([
       Cloud.sb.from('owner_state').select('data').eq('id', 1).maybeSingle(),
       Cloud.sb.from('tasks').select('id,data'),
+      Cloud.sb.from('doors').select('id,data'),
       Cloud.sb.from('portals').select('*'),
     ]);
-    for (const r of [st, tk, pt]) if (r.error) throw r.error;
+    for (const r of [st, tk, dr, pt]) if (r.error) throw r.error;
     if (!st.data) return false;
     const data = st.data.data || {};
     data.tasks = tk.data.map((r) => r.data);
+    data.doors = dr.data.map((r) => r.data);
+    const hasLocal = S.state && (S.state.tasks.length || S.state.doors.length || Object.keys(S.state.checkins || {}).length);
+    if (isDirty() && hasLocal) {
+      // keep the unsent local copy and upload the difference
+      Cloud.synced = {
+        state: stable(Object.assign({}, data, { tasks: undefined, doors: undefined })),
+        tasks: Object.fromEntries(tk.data.map((r) => [r.id, stable(r.data)])),
+        doors: Object.fromEntries(dr.data.map((r) => [r.id, stable(r.data)])),
+        portals: Object.fromEntries(pt.data.map((p) => [p.id, stable(p)])),
+      };
+      Cloud.lastLoad = Date.now();
+      Cloud.push();
+      return true;
+    }
     S.replace(data, { silent: true });
     Cloud.markSynced();
     // remember which portals exist server-side so removed team members get cleaned up
@@ -142,11 +186,33 @@
   let again = false;
   Cloud.schedule = () => {
     if (Cloud.mode !== 'cloud' || Cloud.role !== 'owner') return;
+    setDirty(true);
     Cloud.setStatus('saving');
     clearTimeout(timer);
     timer = setTimeout(Cloud.push, 700);
   };
   Cloud.pending = () => pushing || timer !== null;
+
+  // upsert changed rows / delete removed rows for one table keyed by id
+  const syncRows = async (table, rows, toRow) => {
+    const map = {};
+    const up = [];
+    rows.forEach((x) => {
+      const s = stable(x);
+      map[x.id] = s;
+      if (Cloud.synced[table][x.id] !== s) up.push(toRow(x));
+    });
+    if (up.length) {
+      const { error } = await Cloud.sb.from(table).upsert(up);
+      if (error) throw error;
+    }
+    const del = Object.keys(Cloud.synced[table]).filter((id) => !map[id]);
+    if (del.length) {
+      const { error } = await Cloud.sb.from(table).delete().in('id', del);
+      if (error) throw error;
+    }
+    Cloud.synced[table] = map;
+  };
 
   Cloud.push = async () => {
     timer = null;
@@ -182,23 +248,9 @@
       Object.keys(Cloud.synced.portals).forEach((id) => { if (teamIds.has(id) && !pmap[id]) pmap[id] = Cloud.synced.portals[id]; });
       Cloud.synced.portals = pmap;
 
-      const tmap = {};
-      const tUp = [];
-      S.state.tasks.forEach((t) => {
-        const s = stable(t);
-        tmap[t.id] = s;
-        if (Cloud.synced.tasks[t.id] !== s) tUp.push({ id: t.id, data: t, assignee: assigneeOf(t) });
-      });
-      if (tUp.length) {
-        const { error } = await sb.from('tasks').upsert(tUp);
-        if (error) throw error;
-      }
-      const tDel = Object.keys(Cloud.synced.tasks).filter((id) => !tmap[id]);
-      if (tDel.length) {
-        const { error } = await sb.from('tasks').delete().in('id', tDel);
-        if (error) throw error;
-      }
-      Cloud.synced.tasks = tmap;
+      await syncRows('tasks', S.state.tasks, (t) => ({ id: t.id, data: t, assignee: assigneeOf(t) }));
+      await syncRows('doors', S.state.doors, (d) => ({ id: d.id, data: d }));
+      if (timer === null && !again) setDirty(false);
       Cloud.setStatus('synced');
     } catch (e) {
       console.error(e);

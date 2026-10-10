@@ -34,7 +34,7 @@
       .join('')}</div>`;
   NS.head = (title, sub, actions = '') => {
     const r = NS.ui.route || '';
-    const sec = r.startsWith('hq') ? 'HQ · PawMinds' : r.startsWith('life') ? 'Life' : '';
+    const sec = r.startsWith('hq') ? 'HQ · PawMinds' : r.startsWith('doors') ? 'HQ · Door-to-door' : r.startsWith('life') ? 'Life' : '';
     return `<div class="top"><div class="top-t">${sec ? `<div class="sec-eyebrow">${sec}</div>` : ''}<h1>${esc(title)}</h1>${sub ? `<div class="sub">${sub}</div>` : ''}</div><div class="top-act">${actions}</div></div>`;
   };
   NS.emptyState = (msg, btn = '') => `<div class="emptyst">${icon('star', 22)}<p>${msg}</p>${btn}</div>`;
@@ -153,6 +153,19 @@
           .join('')}</datalist>${hint}</label>`;
       case 'static':
         return `<div class="${cls}">${lab}<div class="static">${f.html}</div></div>`;
+      // tap-to-select pills: 'chips' = pick any number, 'radio' = pick one
+      case 'chips':
+      case 'radio': {
+        const multi = f.type === 'chips';
+        const sel = new Set(multi ? v || [] : [v]);
+        return `<div class="${cls}">${lab}<div class="chipset">${f.options
+          .map(opt)
+          .map(
+            (o) =>
+              `<label class="pill"><input type="${multi ? 'checkbox' : 'radio'}" name="${f.k}" value="${esc(o.k)}" ${sel.has(o.k) ? 'checked' : ''}><span>${esc(o.label)}</span></label>`
+          )
+          .join('')}</div>${hint}</div>`;
+      }
       default:
         return `<label class="${cls}">${lab}<input type="${f.type || 'text'}" name="${f.k}" value="${esc(v)}" ${f.type === 'number' ? 'step="any"' : ''} placeholder="${esc(f.ph || '')}">${hint}</label>`;
     }
@@ -162,8 +175,13 @@
     const o = {};
     for (const f of list) {
       if (f.type === 'static') continue;
-      if (f.type === 'multi') {
+      if (f.type === 'multi' || f.type === 'chips') {
         o[f.k] = [...form.querySelectorAll(`input[name="${f.k}"]:checked`)].map((i) => i.value);
+        continue;
+      }
+      if (f.type === 'radio') {
+        const r = form.querySelector(`input[name="${f.k}"]:checked`);
+        o[f.k] = r ? r.value : '';
         continue;
       }
       const el = form.elements.namedItem(f.k);

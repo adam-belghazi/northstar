@@ -49,7 +49,8 @@
     const r = S.readiness();
     const R = NS.READY[r.status];
     const ci = st.checkins[T];
-    const ciHits = ci ? S.METRICS.filter((m) => m.test(ci)).length : 0;
+    const MS = S.metrics();
+    const ciHits = ci ? MS.filter((m) => m.test(ci, T)).length : 0;
 
     const pr = priorities();
     const due = dueSoon();
@@ -62,6 +63,7 @@
     return `${NS.head(`${greet}${name}`, NS.parse(T).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }))}
       ${sample}
       ${NS.focusCard()}
+      <div class="grid">${NS.doorsHomeCard()}</div>
       <div class="grid g3">
         ${NS.gateCard(true)}
         <a class="card link-card" href="#/hq/readiness" style="--c:${R.color}">
@@ -72,7 +74,7 @@
         <a class="card link-card" href="#/life/checkin">
           <h3>${icon('checkin', 15)} Today's check-in</h3>
           ${ci
-            ? `<div class="ready-row">${NS.ring(ciHits / S.METRICS.length, { size: 104, color: 'var(--green)', label: `${ciHits}/${S.METRICS.length}`, sub: 'habits' })}<div><div class="ready-l">Logged</div><div class="muted small">Tap to update before bed.</div></div></div>`
+            ? `<div class="ready-row">${NS.ring(ciHits / (MS.length || 1), { size: 104, color: 'var(--p1)', label: `${ciHits}/${MS.length}`, sub: 'habits' })}<div><div class="ready-l">Logged</div><div class="muted small">Tap to update before bed.</div></div></div>`
             : `<div class="ci-cta"><div class="ready-l">Not logged yet</div><p class="muted small">60 seconds. It keeps your streaks honest and feeds the weekly review.</p><span class="btn pri sm">Do it now</span></div>`}
         </a>
       </div>

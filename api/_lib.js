@@ -72,14 +72,34 @@ export function nextRenewal(sub, today) {
 
 // ---------- owner data ----------
 export async function loadOwnerData(db) {
-  const [{ data: st }, { data: rows }] = await Promise.all([
+  const [{ data: st }, { data: rows }, { data: doorRows }] = await Promise.all([
     db.from('owner_state').select('data').eq('id', 1).maybeSingle(),
     db.from('tasks').select('data'),
+    db.from('doors').select('data'),
   ]);
   const data = (st && st.data) || {};
   data.tasks = (rows || []).map((r) => r.data);
+  data.doors = (doorRows || []).map((r) => r.data);
   data.settings = data.settings || {};
   return data;
+}
+
+// Constant-time string compare for secrets in URLs and headers
+export function safeEqual(a, b) {
+  a = String(a || '');
+  b = String(b || '');
+  if (!a || a.length !== b.length) return false;
+  let x = 0;
+  for (let i = 0; i < a.length; i++) x |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return x === 0;
+}
+
+// The 5-minute scheduler (Supabase pg_cron) signs its calls with a token that only lives in the database.
+export async function isTick(req, db) {
+  const token = bearer(req);
+  if (!token) return false;
+  const { data } = await db.from('app_secrets').select('value').eq('name', 'tick').maybeSingle();
+  return !!data && safeEqual(token, data.value);
 }
 
 // Returns true the first time a key is seen, so each notification goes out once.

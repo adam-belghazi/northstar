@@ -224,3 +224,35 @@ begin
   begin alter publication supabase_realtime add table public.portal_items; exception when duplicate_object then null; end;
   begin alter publication supabase_realtime add table public.files; exception when duplicate_object then null; end;
 end $$;
+
+-- =====================================================================
+-- v2.1: door-to-door log, card photos, and the 5-minute scheduler
+-- =====================================================================
+create table if not exists public.doors (
+  id text primary key,
+  data jsonb not null,
+  updated_at timestamptz not null default now()
+);
+alter table public.doors enable row level security;
+drop policy if exists owner_all on public.doors;
+create policy owner_all on public.doors for all to authenticated using (public.is_owner()) with check (public.is_owner());
+drop trigger if exists doors_touch on public.doors;
+create trigger doors_touch before update on public.doors for each row execute function public.touch_updated_at();
+
+alter table public.files drop constraint if exists files_scope_check;
+alter table public.files add constraint files_scope_check check (scope in ('portal', 'brand', 'task', 'door'));
+
+-- secrets only the server can read (RLS on, no policies)
+create table if not exists public.app_secrets (name text primary key, value text not null);
+alter table public.app_secrets enable row level security;
+insert into public.app_secrets (name, value)
+values ('tick', replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', ''))
+on conflict (name) do nothing;
+
+-- every 5 minutes: walk-in reminders + 8:30 digest (change the URL if your app address changes)
+create extension if not exists pg_net;
+create extension if not exists pg_cron;
+select cron.schedule('northstar-doors-tick', '*/5 * * * *', $$ select net.http_post(
+  url := 'https://northstar-six-mu.vercel.app/api/doors-tick',
+  headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', 'Bearer ' || (select value from public.app_secrets where name = 'tick')),
+  body := '{}'::jsonb, timeout_milliseconds := 20000) $$);

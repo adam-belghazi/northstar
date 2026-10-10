@@ -37,31 +37,86 @@
     { k: 'contacted', label: 'Contacted', color: 'var(--p3)' },
     { k: 'ready', label: 'Ready to hire', color: 'var(--p1)' },
   ];
+  // Hour buckets. "Work" is Door-to-door + PawMinds, with one shared note.
   S.HOURS = [
-    { k: 'sales', label: 'Door-to-door', color: 'var(--p1)' },
-    { k: 'pawminds', label: 'PawMinds', color: 'var(--p2)' },
-    { k: 'training', label: 'Training', color: 'var(--p3)' },
-    { k: 'relationships', label: 'People', color: 'var(--p4)' },
-    { k: 'learning', label: 'Learning', color: 'var(--g2)' },
-    { k: 'rest', label: 'Rest', color: 'var(--g3)' },
+    { k: 'sales', label: 'Door-to-door', group: 'work', color: 'var(--p1)' },
+    { k: 'pawminds', label: 'PawMinds', group: 'work', color: 'var(--p2)' },
+    { k: 'training', label: 'Gym', color: 'var(--p3)' },
     { k: 'wasted', label: 'Wasted', color: 'var(--danger)' },
   ];
   S.PRAYERS = ['Fajr', 'Dhuhr', 'Asr', 'Maghrib', 'Isha'];
-  // Each metric is one "did I show up today?" signal from the daily check-in.
-  S.METRICS = [
-    { k: 'wake', label: 'Woke on time', area: 'health', test: (c) => !!c.wakeOnTime },
-    { k: 'bed', label: 'Slept on time', area: 'health', test: (c) => !!c.sleepOnTime },
-    { k: 'sleep', label: '7h+ sleep', area: 'health', test: (c) => Number(c.sleepHours) >= 7 },
-    { k: 'd2d', label: 'Door-to-door', area: 'hustle', test: (c) => !!c.d2d },
-    { k: 'follow', label: 'Followed up', area: 'hustle', test: (c) => !!c.followUp },
-    { k: 'train', label: 'Trained', area: 'health', test: (c) => !!c.trained },
-    { k: 'cal', label: 'Calorie goal', area: 'health', test: (c) => !!c.calories },
-    { k: 'pray', label: 'All 5 prayers', area: 'habits', test: (c) => (c.prayers || []).filter(Boolean).length === 5 },
-    { k: 'med', label: 'Meditated', area: 'habits', test: (c) => !!c.meditated },
-    { k: 'peace', label: 'Peace of mind 4+', area: 'habits', test: (c) => Number(c.peace) >= 4 },
-    { k: 'gf', label: 'Girlfriend on time', area: 'relationship', test: (c) => !!c.gf },
-  ];
   S.find = (list, k) => list.find((x) => x.k === k) || list[0];
+
+  // ---------- daily check-in: editable items ----------
+  S.CI_TYPES = [
+    { k: 'toggle', label: 'On / off' },
+    { k: 'toggle_time', label: 'On / off + time' },
+    { k: 'toggle_number', label: 'On / off + number' },
+    { k: 'number', label: 'Number' },
+    { k: 'money', label: 'AED amount' },
+    { k: 'minutes', label: 'Minutes counter' },
+    { k: 'time', label: 'Time' },
+    { k: 'choice', label: 'Choice (tap one or more)' },
+    { k: 'pills', label: 'Checklist pills' },
+  ];
+  S.CI_AREAS = [...S.AREAS.map((a) => ({ k: a.k, label: a.label })), { k: 'work', label: 'Work' }, { k: 'none', label: "Doesn't count" }];
+  // Item ids match the keys older check-ins were saved under, so history keeps working.
+  S.defaultCheckin = () => ({
+    groups: [
+      { id: 'g_sleep', name: 'Sleep', items: [
+        { id: 'wakeOnTime', label: 'Woke up on time', type: 'toggle_time', extra: 'wakeTime', area: 'health' },
+        { id: 'sleepOnTime', label: 'Slept on time', type: 'toggle_time', extra: 'sleepTime', area: 'health' },
+        { id: 'sleepHours', label: 'Hours slept', type: 'number', area: 'health', target: 7, metricLabel: '7h+ sleep' },
+      ] },
+      { id: 'g_work', name: 'Work', items: [
+        { id: 'workedOn', label: 'Today I worked on', type: 'choice', options: ['Door-to-door', 'PawMinds', 'Other'], area: 'work', auto: 'doors', metricLabel: 'Worked' },
+        { id: 'd2dAmount', label: 'Earned today', type: 'money', area: 'none', auto: 'deposits' },
+        { id: 'followUp', label: 'Followed up with people', type: 'toggle_number', extra: 'followUpCount', area: 'work', auto: 'texts', metricLabel: 'Followed up' },
+      ] },
+      { id: 'g_body', name: 'Body', items: [
+        { id: 'trained', label: 'Hit the gym', type: 'toggle', area: 'health' },
+        { id: 'calories', label: 'Hit my calorie goal', type: 'toggle', area: 'health' },
+      ] },
+      { id: 'g_mind', name: 'Mind & deen', items: [
+        { id: 'prayers', label: 'Prayers', type: 'pills', options: S.PRAYERS.slice(), area: 'habits', metricLabel: 'All 5 prayers' },
+        { id: 'meditated', label: 'Meditated', type: 'minutes', area: 'habits', step: 5 },
+      ] },
+    ],
+  });
+  S.ciConfig = () => (S.state && S.state.settings.checkin && S.state.settings.checkin.groups ? S.state.settings.checkin : S.defaultCheckin());
+  S.ciItems = () => S.ciConfig().groups.flatMap((g) => g.items);
+  S.ciExtraKey = (it) => it.extra || it.id + '_x';
+
+  // Did this item count as "showed up" on a day? Door activity counts too (auto).
+  S.ciHit = (it, c, auto) => {
+    const v = c[it.id];
+    const a = auto || {};
+    switch (it.type) {
+      case 'toggle':
+      case 'toggle_time':
+      case 'toggle_number':
+        return !!v || (it.auto === 'texts' && a.texts > 0);
+      case 'number':
+      case 'money':
+      case 'minutes':
+        return Number(v) >= (Number(it.target) || 0.0001) || (it.auto === 'deposits' && a.deposits > 0);
+      case 'pills': {
+        const need = Number(it.target) || (it.options || []).length;
+        return Array.isArray(v) && v.filter(Boolean).length >= need;
+      }
+      case 'choice':
+        return (Array.isArray(v) && v.length > 0) || (it.auto === 'doors' && a.doors > 0);
+      case 'time':
+        return !!v && (!it.target || v <= it.target);
+      default:
+        return false;
+    }
+  };
+  // The signals used by streaks, levels and the bad-week detector.
+  S.metrics = () =>
+    S.ciItems()
+      .filter((it) => it.area && it.area !== 'none')
+      .map((it) => ({ k: it.id, label: it.metricLabel || it.label, area: it.area, test: (c, d) => S.ciHit(it, c, S.autoDay(d)) }));
 
   // ---------- persistence ----------
   S.empty = () => ({
@@ -69,6 +124,7 @@
     settings: { currency: 'AED', gateAmount: 40000, gateLabel: 'Run PawMinds ads', name: '', sample: false, timezone: 'Asia/Dubai' },
     goals: [],
     checkins: {},
+    doors: [],
     wishlist: [],
     tasks: [],
     income: [],
@@ -94,6 +150,12 @@
       }
       delete t.owner;
     });
+    // older check-ins: meditation was yes/no, door-to-door was a toggle
+    Object.values(st.checkins || {}).forEach((c) => {
+      if (typeof c.meditated === 'boolean') c.meditated = c.meditated ? 10 : 0;
+      if (c.d2d === true && !c.workedOn) c.workedOn = ['Door-to-door'];
+    });
+    st.doors = st.doors || [];
     return st;
   };
 
@@ -148,7 +210,11 @@
   S.incomeEntries = () => {
     const out = [];
     Object.entries(S.state.checkins).forEach(([date, c]) => {
-      if (Number(c.d2dAmount) > 0) out.push({ date, amount: Number(c.d2dAmount), currency: 'AED', note: 'Door-to-door', source: 'checkin' });
+      if (Number(c.d2dAmount) > 0) out.push({ date, amount: Number(c.d2dAmount), currency: 'AED', note: 'Earned (check-in)', source: 'checkin' });
+    });
+    (S.state.doors || []).forEach((d) => {
+      if (d.depositPaid && Number(d.depositAmount) > 0)
+        out.push({ date: d.depositDate || String(d.at || '').slice(0, 10), amount: Number(d.depositAmount), currency: 'AED', note: 'Deposit · ' + (d.name || 'Door'), source: 'door', doorId: d.id });
     });
     S.state.income.forEach((i) => out.push(Object.assign({ source: 'manual' }, i)));
     return out.sort((a, b) => (a.date < b.date ? 1 : -1));
@@ -221,16 +287,16 @@
       xp += (g.subtasks || []).filter((s) => s.done).length * 10;
       if (g.status === 'done') xp += 50;
     });
-    const ms = S.METRICS.filter((m) => m.area === k);
+    const ms = S.metrics().filter((m) => m.area === k);
     S.lastDays(30).forEach((d) => {
       const c = S.state.checkins[d];
-      if (c) ms.forEach((m) => m.test(c) && (xp += 2));
+      if (c) ms.forEach((m) => m.test(c, d) && (xp += 2));
     });
     let hits = 0,
       tot = 0;
     S.lastDays(7).forEach((d) => {
       const c = S.state.checkins[d];
-      if (c) ms.forEach((m) => { tot++; if (m.test(c)) hits++; });
+      if (c) ms.forEach((m) => { tot++; if (m.test(c, d)) hits++; });
     });
     return {
       xp,
@@ -333,14 +399,12 @@
       st.checkins[d(-i)] = {
         wakeOnTime: r() < 0.6, wakeTime: '07:00', sleepOnTime: r() < 0.45, sleepTime: '23:30',
         sleepHours: Math.round((5.5 + r() * 2.5) * 2) / 2,
-        d2d: sell, d2dAmount: sell ? Math.round((1200 + r() * 1600) / 50) * 50 : 0,
+        workedOn: sell ? ['Door-to-door', 'PawMinds'] : ['PawMinds'], d2dAmount: sell ? Math.round((1200 + r() * 1600) / 50) * 50 : 0,
         followUp: r() < 0.55, followUpCount: Math.floor(r() * 8),
-        trained: r() < 0.6, calories: r() < 0.5, meditated: r() < 0.4, peace: 2 + Math.floor(r() * 4),
-        prayers: S.PRAYERS.map(() => r() < 0.85), gf: r() < 0.7,
-        hours: {
-          sales: sell ? 4 + Math.round(r() * 3) : 0, pawminds: 1 + Math.round(r() * 3), training: Math.round(r() * 2),
-          relationships: 1 + Math.round(r() * 2), learning: Math.round(r()), rest: 1 + Math.round(r() * 2), wasted: Math.round(r() * 3),
-        },
+        trained: r() < 0.6, calories: r() < 0.5, meditated: r() < 0.4 ? 15 : 0,
+        prayers: S.PRAYERS.map(() => r() < 0.85),
+        hours: { sales: sell ? 4 + Math.round(r() * 3) : 0, pawminds: 1 + Math.round(r() * 3), training: Math.round(r() * 2), wasted: Math.round(r() * 3) },
+        workNote: sell ? 'Marina towers in the morning, PawMinds copy at night.' : 'PawMinds product page.',
         note: '',
       };
     }
@@ -371,6 +435,16 @@
       { id: id(), name: 'Media buyer', why: 'Run and scale Meta ads once the gate opens', price: 3000, currency: 'AED', trigger: 'After the 40,000 AED gate', link: '', notes: '', status: 'considering' },
       { id: id(), name: 'Customer support VA', why: 'Handle DMs and emails after launch', price: 1200, currency: 'AED', trigger: 'At 30 orders a week', link: '', notes: '', status: 'considering' },
     ];
+    // a few sample doors so the Door-to-door section has something to show
+    const at = (days, hh) => `${d(days)}T${hh}`;
+    const door = (o) => Object.assign({ id: id(), created: new Date().toISOString(), area: 'JLT', type: 'Café', dm: 'yes', dmRole: 'owner', services: [], qty: 1, notes: '', objections: [], licence: false, texts: {}, replied: false }, o);
+    st.doors = [
+      door({ name: 'Café Nero (sample)', at: at(0, '10:20'), dmRole: 'manager', dmName: 'Dani', services: ['cards'], qty: 5, price: 500, status: 'meeting', meetAt: at(0, '16:00'), askFor: 'Dani', bring: ['cards', 'price_sheet'], phone: '0501234567', objections: ['too_expensive'] }),
+      door({ name: 'Glow Salon (sample)', area: 'Marina', type: 'Salon', at: at(-1, '12:05'), services: ['website', 'content'], price: 3500, status: 'follow_up', nextAt: d(0), phone: '0559876543', objections: ['send_info'], texts: { first: new Date(Date.now() - 864e5 * 2).toISOString() } }),
+      door({ name: 'Iron Gym (sample)', area: 'Marina', type: 'Gym', at: at(0, '11:40'), dm: 'no', services: ['ads'], price: 2500, status: 'pitched', phone: '0524445566', objections: ['needs_owner'] }),
+      door({ name: 'Bloom Florist (sample)', area: 'JLT', type: 'Retail', at: at(-3, '15:10'), services: ['cards'], qty: 10, price: 900, status: 'closed', depositPaid: true, depositAmount: 450, depositDate: d(-3) }),
+    ];
+
     return S.normalize(st);
   };
 })(window.NS);

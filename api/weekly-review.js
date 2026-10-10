@@ -1,23 +1,9 @@
 // Weekly AI review: Sunday evening via Vercel Cron, or on demand from the Review page.
 import Anthropic from '@anthropic-ai/sdk';
 import { admin, isCron, requireOwner, send, sendPush, loadOwnerData, once, todayIn, addDays } from './_lib.js';
+import { items as ciItems, autoDay, hit, describe, HOURS } from './_checkin.js';
 
 const PEG = 3.6725;
-const PRAYERS = ['Fajr', 'Dhuhr', 'Asr', 'Maghrib', 'Isha'];
-const METRICS = [
-  ['Woke on time', (c) => !!c.wakeOnTime],
-  ['Slept on time', (c) => !!c.sleepOnTime],
-  ['7h+ sleep', (c) => Number(c.sleepHours) >= 7],
-  ['Door-to-door', (c) => !!c.d2d],
-  ['Followed up', (c) => !!c.followUp],
-  ['Trained', (c) => !!c.trained],
-  ['Calorie goal', (c) => !!c.calories],
-  ['All 5 prayers', (c) => (c.prayers || []).filter(Boolean).length === 5],
-  ['Meditated', (c) => !!c.meditated],
-  ['Peace of mind 4+', (c) => Number(c.peace) >= 4],
-  ['Girlfriend on time', (c) => !!c.gf],
-];
-const HOURS = { sales: 'Door-to-door', pawminds: 'PawMinds', training: 'Training', relationships: 'People', learning: 'Learning', rest: 'Rest', wasted: 'Wasted' };
 
 const SYSTEM = `You write the weekly operating review inside Northstar, one person's personal operating system. The person funds their startup, PawMinds, through door-to-door sales. PawMinds can only run paid ads once door-to-door earnings reach a money gate. Their rule: finish every PawMinds task that doesn't need money now, so the money has somewhere to go the moment it lands.
 
@@ -39,8 +25,12 @@ function buildBrief(data, start, end) {
   for (let d = start; d <= end; d = addDays(d, 1)) days.push(d);
   const ci = data.checkins || {};
   const s = data.settings || {};
+  const tz = s.timezone || 'Asia/Dubai';
+  const doors = data.doors || [];
   const lines = [];
   const gateAmt = Number(s.gateAmount) || 40000;
+  const its = ciItems(s);
+  const metrics = its.filter((it) => it.area && it.area !== 'none');
 
   lines.push(`Week: ${start} to ${end}. Name: ${s.name || '(not set)'}. Money gate: ${gateAmt} AED to unlock "${s.gateLabel || 'Run PawMinds ads'}".`);
 
@@ -49,21 +39,19 @@ function buildBrief(data, start, end) {
   for (const d of days) {
     const c = ci[d];
     const wd = new Date(d + 'T00:00:00Z').toUTCString().slice(0, 3);
-    if (!c) { lines.push(`${wd} ${d}: not logged`); continue; }
-    const marks = METRICS.map(([label, test]) => `${label} ${test(c) ? 'yes' : 'no'}`).join('; ');
-    const prayers = PRAYERS.filter((_, i) => (c.prayers || [])[i]).join('/') || 'none';
-    const hours = Object.entries(c.hours || {}).filter(([, v]) => Number(v) > 0).map(([k, v]) => `${HOURS[k] || k} ${v}h`).join(', ');
-    lines.push(`${wd} ${d}: ${marks}. Sleep ${c.sleepHours ?? '?'}h. Prayers: ${prayers}. Peace ${c.peace ?? '?'}/5. Earned ${Number(c.d2dAmount) || 0} AED. Follow-ups ${c.followUpCount ?? 0}. Hours: ${hours || 'not logged'}.${c.note ? ' Note: ' + c.note : ''}`);
+    const auto = autoDay(doors, d, tz);
+    if (!c) { lines.push(`${wd} ${d}: not logged${auto.doors ? ` (but ${auto.doors} doors logged)` : ''}`); continue; }
+    const h = c.hours || {};
+    const hours = HOURS.filter(([k]) => Number(h[k]) > 0).map(([k, label]) => `${label} ${h[k]}h`).join(', ');
+    lines.push(`${wd} ${d}: ${its.map((it) => describe(it, c, auto)).join('; ')}. Hours: ${hours || 'not logged'}.${c.workNote ? ' Work note: ' + c.workNote : ''}${c.note ? ' Note: ' + c.note : ''}`);
   }
   lines.push(`\n# Habit rates (${logged.length}/7 days logged)`);
-  for (const [label, test] of METRICS) {
-    const hits = logged.filter((d) => test(ci[d])).length;
-    lines.push(`${label}: ${hits}/${logged.length}`);
+  for (const it of metrics) {
+    const hits = logged.filter((d) => hit(it, ci[d], autoDay(doors, d, tz))).length;
+    lines.push(`${it.metricLabel || it.label}: ${hits}/${logged.length}`);
   }
-  const hourTotals = {};
-  logged.forEach((d) => Object.entries(ci[d].hours || {}).forEach(([k, v]) => (hourTotals[k] = (hourTotals[k] || 0) + (Number(v) || 0))));
   lines.push('\n# Hours this week');
-  lines.push(Object.entries(hourTotals).map(([k, v]) => `${HOURS[k] || k}: ${v}h`).join(', ') || 'none logged');
+  lines.push(HOURS.map(([k, label]) => `${label}: ${logged.reduce((a, d) => a + (Number((ci[d].hours || {})[k]) || 0), 0)}h`).join(', '));
 
   lines.push('\n# Goals');
   for (const g of data.goals || []) {
@@ -99,9 +87,11 @@ function buildBrief(data, start, end) {
   }
 
   const crit = tasks.filter((t) => t.critical !== false && !t.moneyGated);
+  const deposits = doors.filter((d) => d.depositPaid).map((d) => ({ date: d.depositDate || String(d.at || '').slice(0, 10), amount: Number(d.depositAmount) || 0 }));
   const earnedAll = Object.values(ci).reduce((a, c) => a + (Number(c.d2dAmount) || 0), 0) +
+    deposits.reduce((a, x) => a + x.amount, 0) +
     (data.income || []).reduce((a, i) => a + (Number(i.amount) || 0) * (i.currency === 'USD' ? PEG : 1), 0);
-  const earnedWeek = logged.reduce((a, d) => a + (Number(ci[d].d2dAmount) || 0), 0);
+  const earnedWeek = days.reduce((a, d) => a + (Number((ci[d] || {}).d2dAmount) || 0), 0) + deposits.filter((x) => x.date >= start && x.date <= end).reduce((a, x) => a + x.amount, 0);
   lines.push('\n# Readiness & money');
   lines.push(`Launch tasks that don't need money: ${crit.filter((t) => !open(t)).length}/${crit.length} done.`);
   lines.push(`Money gate: ${Math.round(earnedAll)} / ${gateAmt} AED total. Earned this week: ${earnedWeek} AED.`);

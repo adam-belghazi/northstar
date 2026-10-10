@@ -143,105 +143,183 @@
   A.newGoal = (el) => NS.editGoal(null, el.dataset.area ? { area: el.dataset.area } : {});
 
   // =====================================================================
-  // DAILY CHECK-IN
+  // DAILY CHECK-IN — items come from the editable config ("Edit items" on the page)
   // =====================================================================
   const ciDate = () => ui.ciDate || NS.today();
   const ciRec = () => S.state.checkins[ciDate()] || {};
+  const RANGES = [7, 14, 30];
+  const ciRange = () => ui.ciRange || 7;
+  const autoNote = (txt) => `<em class="auto-note">${icon('check', 11)} ${txt}</em>`;
+  const newRec = () => ({ hours: {} });
 
-  const tog = (k, label, c, extra = '') =>
-    `<label class="tog"><input type="checkbox" data-c="ci" data-k="${k}" ${c[k] ? 'checked' : ''}><span class="sw"></span><span class="tog-l">${label}</span>${extra}</label>`;
-  const mini = (k, c, type, attrs = '') =>
-    `<input class="mini-in" type="${type}" data-c="ci" data-k="${k}" value="${esc(c[k] ?? '')}" ${attrs}>`;
+  const ciItem = (it, c, auto) => {
+    const v = c[it.id];
+    const x = S.ciExtraKey(it);
+    const mini = (k, type, attrs = '') => `<input class="mini-in" type="${type}" data-c="ci" data-k="${k}" value="${esc(c[k] ?? '')}" ${attrs}>`;
+    const tog = (extra = '', note = '') =>
+      `<label class="tog"><input type="checkbox" data-c="ci" data-k="${it.id}" ${v ? 'checked' : ''}><span class="sw"></span><span class="tog-l">${esc(it.label)}${note}</span>${extra}</label>`;
+    switch (it.type) {
+      case 'toggle':
+        return tog();
+      case 'toggle_time':
+        return tog(mini(x, 'time', `aria-label="${esc(it.label)}: time"`));
+      case 'toggle_number': {
+        const note = it.auto === 'texts' && auto.texts ? autoNote(`${NS.plural(auto.texts, 'WhatsApp text')} sent from Doors`) : '';
+        return tog(mini(x, 'number', 'min="0" placeholder="#" aria-label="How many"'), note);
+      }
+      case 'number':
+        return `<div class="row-in"><span>${esc(it.label)}</span>${mini(it.id, 'number', 'step="0.5" min="0" placeholder="0"')}</div>`;
+      case 'money': {
+        const dep = it.auto === 'deposits' ? auto.deposits : 0;
+        const sub = it.auto === 'deposits' ? `<em class="dim">${dep ? 'Add anything else you earned today' : 'Counts toward the money gate'}</em>` : '';
+        return `<div class="row-in"><span>${esc(it.label)}${dep ? autoNote(`AED ${dep.toLocaleString('en-US')} in deposits from Doors`) : ''}${sub}</span>
+          <div class="aed">${mini(it.id, 'number', 'min="0" step="50" placeholder="0"')}<span>AED</span></div></div>`;
+      }
+      case 'minutes': {
+        const step = Number(it.step) || 5;
+        return `<div class="row-in"><span>${esc(it.label)}</span><div class="stepper">
+          <button type="button" data-a="ciStep" data-k="${it.id}" data-v="-${step}" aria-label="${step} minutes less">−</button>
+          <b class="num">${Number(v) || 0}<small> min</small></b>
+          <button type="button" data-a="ciStep" data-k="${it.id}" data-v="${step}" aria-label="${step} minutes more">+</button></div></div>`;
+      }
+      case 'time':
+        return `<div class="row-in"><span>${esc(it.label)}</span>${mini(it.id, 'time')}</div>`;
+      case 'choice': {
+        // doors logged today pre-select the door-to-door option until you change it yourself
+        const autoPick = it.auto === 'doors' && auto.doors > 0 && !Array.isArray(v);
+        const sel = new Set(Array.isArray(v) ? v : []);
+        const opts = it.options || [];
+        return `<div class="row-in col"><span>${esc(it.label)}${it.auto === 'doors' && auto.doors ? autoNote(`${NS.plural(auto.doors, 'door')} logged today`) : ''}</span>
+          <div class="pray" data-choice="${it.id}">${opts
+            .map((o) => `<label class="pill"><input type="checkbox" data-c="ciChoice" data-k="${it.id}" value="${esc(o)}" ${sel.has(o) || (autoPick && /door/i.test(o)) ? 'checked' : ''}><span>${esc(o)}</span></label>`)
+            .join('')}</div></div>`;
+      }
+      case 'pills': {
+        const arr = Array.isArray(v) ? v : [];
+        return `<div class="row-in"><span>${esc(it.label)}</span><div class="pray">${(it.options || [])
+          .map((o, i) => `<label class="pill"><input type="checkbox" data-c="ci" data-k="${it.id}.${i}" ${arr[i] ? 'checked' : ''}><span>${esc(o)}</span></label>`)
+          .join('')}</div></div>`;
+      }
+      default:
+        return '';
+    }
+  };
 
+  // ---------- side panel: range grid, bad-week detector, hours ----------
   NS.ciSide = () => {
-    const days = S.lastDays(7);
+    const n = ciRange();
+    const days = S.lastDays(n);
     const recs = days.map((d) => S.state.checkins[d]);
     const logged = recs.filter(Boolean).length;
-    const rows = S.METRICS.map((m) => {
-      const hits = recs.filter((c) => c && m.test(c)).length;
-      const rate = logged ? hits / logged : null;
-      return { m, hits, rate };
+    const rows = S.metrics().map((m) => {
+      const hits = days.filter((d, i) => recs[i] && m.test(recs[i], d)).length;
+      return { m, hits, rate: logged ? hits / logged : null };
     });
-    const grid = `<div class="wk-grid" style="--n:${days.length}">
-      <div></div>${days.map((d) => `<div class="wk-d ${d === ciDate() ? 'cur' : ''}">${NS.parse(d).toLocaleDateString('en-GB', { weekday: 'narrow' })}</div>`).join('')}<div class="wk-d">Rate</div>
+    const dayLabel = (d) => {
+      const dt = NS.parse(d);
+      if (n <= 14) return dt.toLocaleDateString('en-GB', { weekday: 'narrow' });
+      return dt.getDay() === 1 ? dt.getDate() : '';
+    };
+    const narrow = window.innerWidth < 860;
+    const cell = n <= 7 ? (narrow ? 17 : 22) : n <= 14 ? (narrow ? 10 : 15) : narrow ? 5 : 9;
+    const grid = `<div class="wk-scroll"><div class="wk-grid" style="--n:${n};--cell:${cell}px;--cell-gap:${n <= 7 ? 4 : n <= 14 ? 2 : 1}px">
+      <div></div>${days.map((d) => `<div class="wk-d ${d === ciDate() ? 'cur' : ''}" title="${NS.fmtDate(d)}">${dayLabel(d)}</div>`).join('')}<div class="wk-d">Rate</div>
       ${rows
         .map(
-          (r) => `<div class="wk-l">${r.m.label}</div>${recs
-            .map((c) => `<div class="wk-c ${!c ? 'none' : r.m.test(c) ? 'hit' : 'miss'}"></div>`)
+          (r) => `<div class="wk-l">${esc(r.m.label)}</div>${days
+            .map((d, i) => `<div class="wk-c ${!recs[i] ? 'none' : r.m.test(recs[i], d) ? 'hit' : 'miss'}" title="${NS.fmtDate(d)}"></div>`)
             .join('')}<div class="wk-r num ${r.rate == null ? 'dim' : r.rate >= 0.85 ? 'green' : r.rate < 0.6 ? 'red' : ''}">${r.rate == null ? '—' : NS.pct(r.rate)}</div>`
         )
         .join('')}
-    </div>`;
+    </div></div>`;
     const slipping = rows.filter((r) => r.rate != null && r.rate < 0.6 && logged >= 3).sort((a, b) => a.rate - b.rate);
     const strong = rows.filter((r) => r.rate != null && r.rate >= 0.85 && logged >= 3);
+    const rangeNav = `<div class="range-nav">
+      <button type="button" class="btn ghost sm icon-only" data-a="ciRange" data-v="-1" ${n === RANGES[0] ? 'disabled' : ''} aria-label="Fewer days">${icon('chevL', 16)}</button>
+      <button type="button" class="btn ghost sm icon-only" data-a="ciRange" data-v="1" ${n === RANGES[RANGES.length - 1] ? 'disabled' : ''} aria-label="More days">${icon('chevR', 16)}</button></div>`;
 
-    const hours = S.HOURS.map((h) => ({ h, v: NS.sum(recs.filter(Boolean), (c) => (c.hours || {})[h.k]) }));
-    const totH = NS.sum(hours, (x) => x.v);
-    const hoursBar = totH
-      ? `<div class="stack">${hours.filter((x) => x.v).map((x) => `<i style="flex:${x.v};--c:${x.h.color}" title="${x.h.label}: ${x.v}h"></i>`).join('')}</div>
-         <div class="legend">${hours
-           .filter((x) => x.v)
-           .map((x) => `<span><span class="dot" style="--c:${x.h.color}"></span>${x.h.label} <b class="num">${x.v}h</b> <span class="dim">${Math.round((x.v / totH) * 100)}%</span></span>`)
-           .join('')}</div>`
-      : `<div class="dim small">Log hours in the check-in to see where your days go.</div>`;
-
-    return `<div class="card"><h3>Last 7 days</h3>${grid}<div class="dim small" style="margin-top:8px">${logged}/7 days logged</div></div>
-      <div class="card"><h3>Bad-week detector</h3>
+    return `<div class="card"><div class="card-h"><h3>Last ${n} days</h3>${rangeNav}</div>${grid}<div class="dim small" style="margin-top:10px">${logged}/${n} days logged</div></div>
+      <div class="card"><h3>Bad-week detector <span class="dim">last ${n} days</span></h3>
         ${logged < 3 ? '<div class="dim small">Log at least 3 days to get a read.</div>' : ''}
-        ${slipping.length ? `<div class="signals">${slipping.slice(0, 5).map((r) => `<div class="signal bad">${icon('alert', 14)}<span><b>${r.m.label}</b>: ${r.hits}/${logged} days</span></div>`).join('')}${slipping.length > 5 ? `<div class="dim small">+${slipping.length - 5} more under 60%</div>` : ''}</div>` : logged >= 3 ? '<div class="signal good">' + icon('check', 14) + '<span>Nothing slipping. Keep the streak alive.</span></div>' : ''}
-        ${strong.length ? `<div class="dim small" style="margin-top:10px">Strong: ${strong.map((r) => r.m.label).join(' · ')}</div>` : ''}
+        ${slipping.length ? `<div class="signals">${slipping.slice(0, 5).map((r) => `<div class="signal bad">${icon('alert', 14)}<span><b>${esc(r.m.label)}</b>: ${r.hits}/${logged} days</span></div>`).join('')}${slipping.length > 5 ? `<div class="dim small">+${slipping.length - 5} more under 60%</div>` : ''}</div>` : logged >= 3 ? '<div class="signal good">' + icon('check', 14) + '<span>Nothing slipping. Keep the streak alive.</span></div>' : ''}
+        ${strong.length ? `<div class="dim small" style="margin-top:12px">Strong: ${strong.map((r) => esc(r.m.label)).join(' · ')}</div>` : ''}
       </div>
-      <div class="card"><h3>Where the week went</h3>${hoursBar}</div>`;
+      ${hoursCard(n)}`;
+  };
+
+  // "Where your hours went": totals, daily averages and the change vs the previous period
+  const hoursCard = (n) => {
+    const sumH = (days, k) => NS.sum(days, (d) => ((S.state.checkins[d] || {}).hours || {})[k]);
+    const cur = S.lastDays(n);
+    const prev = cur.map((d) => NS.addDays(d, -n));
+    const daysWith = (days) => days.filter((d) => NS.sum(S.HOURS, (h) => ((S.state.checkins[d] || {}).hours || {})[h.k]) > 0).length;
+    const dCur = daysWith(cur);
+    if (!dCur) return `<div class="card"><h3>Where your hours went</h3><div class="dim small">Log hours in the check-in to see where your days go.</div></div>`;
+    const dPrev = daysWith(prev);
+    const t = Object.fromEntries(S.HOURS.map((h) => [h.k, sumH(cur, h.k)]));
+    const p = Object.fromEntries(S.HOURS.map((h) => [h.k, sumH(prev, h.k)]));
+    const total = NS.sum(S.HOURS, (h) => t[h.k]);
+    const work = t.sales + t.pawminds;
+    const workPrev = p.sales + p.pawminds;
+    const avg = (v, days) => (days ? v / days : 0);
+    const f1 = (x) => (Math.round(x * 10) / 10).toLocaleString('en-US');
+    const delta = (now, before) => {
+      if (!dPrev) return '';
+      const diff = avg(now, dCur) - avg(before, dPrev);
+      if (Math.abs(diff) < 0.1) return '<span class="dim small">same as before</span>';
+      return `<span class="small ${diff > 0 ? '' : 'dim'}">${diff > 0 ? '▲' : '▼'} ${f1(Math.abs(diff))}h/day</span>`;
+    };
+    const row = (label, v, vPrev, sub, cls = '') => `<div class="hrow ${cls}"><div class="grow"><b>${label}</b>${sub ? `<div class="dim small">${sub}</div>` : ''}</div>
+      <div class="hrow-n"><b class="num">${f1(v)}h</b><span class="dim small">${f1(avg(v, dCur))}h/day</span></div><div class="hrow-d">${delta(v, vPrev)}</div></div>`;
+    const wastedPct = total ? t.wasted / total : 0;
+    const pmShare = work ? t.pawminds / work : 0;
+    const insight = [
+      `Work averaged <b>${f1(avg(work, dCur))}h a day</b>${dPrev ? ` (${avg(work, dCur) >= avg(workPrev, dPrev) ? 'up from' : 'down from'} ${f1(avg(workPrev, dPrev))}h the ${n} days before)` : ''}.`,
+      work ? `PawMinds got <b>${NS.pct(pmShare)}</b> of your work hours.` : '',
+      t.wasted ? `Wasted time was <b>${NS.pct(wastedPct)}</b> of what you logged${wastedPct > 0.15 ? ', which is worth fixing' : ''}.` : 'No wasted time logged.',
+    ].filter(Boolean).join(' ');
+    return `<div class="card"><h3>Where your hours went <span class="dim">${dCur}/${n} days with hours</span></h3>
+      <div class="stack">${S.HOURS.filter((h) => t[h.k]).map((h) => `<i style="flex:${t[h.k]};--c:${h.color}" title="${h.label}: ${t[h.k]}h"></i>`).join('')}</div>
+      ${row('Work', work, workPrev, `Door-to-door ${f1(t.sales)}h · PawMinds ${f1(t.pawminds)}h`)}
+      ${row('Gym', t.training, p.training)}
+      ${row('Wasted', t.wasted, p.wasted, total ? NS.pct(wastedPct) + ' of logged time' : '', wastedPct > 0.15 ? 'warn' : '')}
+      <p class="insight">${insight}</p>
+    </div>`;
   };
 
   V.checkin = () => {
     const date = ciDate();
     const c = ciRec();
-    const T = NS.today();
-    const isToday = date === T;
+    const auto = S.autoDay(date);
+    const isToday = date === NS.today();
     const label = isToday ? 'Today' : NS.parse(date).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short' });
     const h = c.hours || {};
     const totH = NS.sum(S.HOURS, (x) => h[x.k]);
-    const prayers = c.prayers || [];
+    const hourIn = (x) =>
+      `<label class="hr" style="--c:${x.color}"><span><span class="dot"></span>${x.label}</span><input type="number" min="0" max="24" step="0.5" data-c="ci" data-k="hours.${x.k}" value="${h[x.k] ?? ''}" placeholder="0"></label>`;
 
     const nav = `<div class="datenav">
       <button type="button" class="btn ghost sm icon-only" data-a="ciNav" data-v="-1" aria-label="Previous day">${icon('chevL')}</button>
       <div class="dn-l"><b>${label}</b><span id="ci-status" class="small ${S.state.checkins[date] ? 'green' : 'dim'}">${S.state.checkins[date] ? 'Logged' : 'Not logged yet'}</span></div>
       <button type="button" class="btn ghost sm icon-only" data-a="ciNav" data-v="1" ${isToday ? 'disabled' : ''} aria-label="Next day">${icon('chevR')}</button>
       ${isToday ? '' : `<button type="button" class="btn sm" data-a="ciNav" data-v="0">Today</button>`}
-    </div>`;
+    </div>
+    <button type="button" class="btn" data-a="ciEdit">${icon('edit', 15)}<span>Edit items</span></button>`;
+
+    const groups = S.ciConfig()
+      .groups.filter((g) => g.items.length)
+      .map((g) => `<div class="ci-g"><h4>${esc(g.name)}</h4>${g.items.map((it) => ciItem(it, c, auto)).join('')}</div>`)
+      .join('');
 
     const form = `<div class="card ci">
-      <div class="ci-g"><h4>Sleep</h4>
-        ${tog('wakeOnTime', 'Woke up on time', c, mini('wakeTime', c, 'time', 'aria-label="Wake time"'))}
-        ${tog('sleepOnTime', 'Slept on time', c, mini('sleepTime', c, 'time', 'aria-label="Bed time"'))}
-        <div class="row-in"><span>Hours slept</span>${mini('sleepHours', c, 'number', 'step="0.5" min="0" max="16" placeholder="0"')}</div>
-      </div>
-      <div class="ci-g"><h4>Hustle</h4>
-        ${tog('d2d', 'Did door-to-door', c)}
-        <div class="row-in"><span>Earned today <em class="dim">(counts toward the gate)</em></span><div class="aed">${mini('d2dAmount', c, 'number', 'min="0" step="50" placeholder="0"')}<span>AED</span></div></div>
-        ${tog('followUp', 'Followed up with people', c, mini('followUpCount', c, 'number', 'min="0" placeholder="#" aria-label="How many"'))}
-      </div>
-      <div class="ci-g"><h4>Body</h4>
-        ${tog('trained', 'Trained', c)}
-        ${tog('calories', 'Hit my calorie goal', c)}
-      </div>
-      <div class="ci-g"><h4>Mind & deen</h4>
-        <div class="row-in"><span>Prayers</span><div class="pray">${S.PRAYERS.map(
-          (p, i) => `<label class="pill"><input type="checkbox" data-c="ci" data-k="prayers.${i}" ${prayers[i] ? 'checked' : ''}><span>${p}</span></label>`
-        ).join('')}</div></div>
-        ${tog('meditated', 'Meditated', c)}
-        <div class="row-in"><span>Peace of mind</span><div class="peace">${[1, 2, 3, 4, 5]
-          .map((n) => `<button type="button" class="${Number(c.peace) === n ? 'on' : ''}" data-a="ciPeace" data-v="${n}">${n}</button>`)
-          .join('')}</div></div>
-      </div>
-      <div class="ci-g"><h4>Relationship</h4>
-        ${tog('gf', 'Attended to my girlfriend on time', c)}
-      </div>
+      ${groups}
       <div class="ci-g"><h4>Where did the day go? <span class="dim small" id="ci-hours">${totH}h logged</span></h4>
-        <div class="hours">${S.HOURS.map(
-          (x) => `<label class="hr" style="--c:${x.color}"><span><span class="dot"></span>${x.label}</span><input type="number" min="0" max="24" step="0.5" data-c="ci" data-k="hours.${x.k}" value="${h[x.k] ?? ''}" placeholder="0"></label>`
-        ).join('')}</div>
+        <div class="hwork">
+          <div class="hwork-h">Work <span class="dim small">Door-to-door + PawMinds</span></div>
+          <div class="hours">${S.HOURS.filter((x) => x.group === 'work').map(hourIn).join('')}</div>
+          <textarea data-c="ci" data-k="workNote" rows="2" placeholder="What did you work on? e.g. 32 doors in Marina, PawMinds checkout copy">${esc(c.workNote || '')}</textarea>
+        </div>
+        <div class="hours">${S.HOURS.filter((x) => !x.group).map(hourIn).join('')}</div>
       </div>
       <div class="ci-g"><h4>Note</h4><textarea data-c="ci" data-k="note" rows="2" placeholder="Anything worth remembering about today?">${esc(c.note || '')}</textarea></div>
     </div>`;
@@ -250,24 +328,7 @@
       <div class="ci-layout"><div>${form}</div><div class="ci-side" id="ci-side">${NS.ciSide()}</div></div>`;
   };
 
-  C.ci = (el) => {
-    const date = ciDate();
-    const c = S.state.checkins[date] || (S.state.checkins[date] = { prayers: [false, false, false, false, false], hours: {} });
-    const k = el.dataset.k;
-    let v;
-    if (el.type === 'checkbox') v = el.checked;
-    else if (el.type === 'number') v = el.value === '' ? null : parseFloat(el.value);
-    else v = el.value;
-    if (k.startsWith('prayers.')) {
-      c.prayers = c.prayers || [false, false, false, false, false];
-      c.prayers[+k.split('.')[1]] = v;
-    } else NS.setPath(c, k, v);
-    // logging earnings implies you went out selling
-    if (k === 'd2dAmount' && v > 0) {
-      c.d2d = true;
-      const t = document.querySelector('[data-k="d2d"]');
-      if (t) t.checked = true;
-    }
+  const ciAfterSave = (c) => {
     S.save();
     document.getElementById('ci-side').innerHTML = NS.ciSide();
     const st = document.getElementById('ci-status');
@@ -276,10 +337,34 @@
     if (hh) hh.textContent = NS.sum(S.HOURS, (x) => (c.hours || {})[x.k]) + 'h logged';
     NS.refreshNav();
   };
-  A.ciPeace = (el) => {
+  const ciRecord = () => {
     const date = ciDate();
-    const c = S.state.checkins[date] || (S.state.checkins[date] = { prayers: [false, false, false, false, false], hours: {} });
-    c.peace = +el.dataset.v;
+    return S.state.checkins[date] || (S.state.checkins[date] = newRec());
+  };
+  C.ci = (el) => {
+    const c = ciRecord();
+    const k = el.dataset.k;
+    let v;
+    if (el.type === 'checkbox') v = el.checked;
+    else if (el.type === 'number') v = el.value === '' ? null : parseFloat(el.value);
+    else v = el.value;
+    const pill = k.match(/^(.+)\.(\d+)$/);
+    if (pill && !k.startsWith('hours.')) {
+      const arr = Array.isArray(c[pill[1]]) ? c[pill[1]] : [];
+      arr[+pill[2]] = v;
+      c[pill[1]] = arr;
+    } else NS.setPath(c, k, v);
+    ciAfterSave(c);
+  };
+  C.ciChoice = (el) => {
+    const c = ciRecord();
+    const box = el.closest('[data-choice]');
+    c[el.dataset.k] = [...box.querySelectorAll('input:checked')].map((i) => i.value);
+    ciAfterSave(c);
+  };
+  A.ciStep = (el) => {
+    const c = ciRecord();
+    c[el.dataset.k] = Math.max(0, (Number(c[el.dataset.k]) || 0) + Number(el.dataset.v));
     S.save();
     NS.render();
   };
@@ -292,6 +377,100 @@
     }
     NS.render();
   };
+  A.ciRange = (el) => {
+    const i = RANGES.indexOf(ciRange()) + Number(el.dataset.v);
+    ui.ciRange = RANGES[NS.clamp(i, 0, RANGES.length - 1)];
+    document.getElementById('ci-side').innerHTML = NS.ciSide();
+  };
+
+  // ---------- check-in editor ----------
+  const TARGET_HINT = { number: 'Counts as done at', money: 'Counts as done at (AED)', minutes: 'Counts as done at (min)', pills: 'Done when this many are ticked', time: 'On time if by' };
+  NS.ciEditor = () => {
+    const g = ui.draft.groups;
+    const sel = (path, list, v, rer) =>
+      `<select data-d="${path}" ${rer ? 'data-rerender="1"' : ''}>${list.map((o) => `<option value="${o.k}" ${o.k === v ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}</select>`;
+    const mv = (a, gi, ii, dir, dis) =>
+      `<button type="button" class="btn ghost sm icon-only" data-a="${a}" data-g="${gi}" data-i="${ii}" data-v="${dir}" ${dis ? 'disabled' : ''} aria-label="Move ${dir < 0 ? 'up' : 'down'}">${dir < 0 ? '↑' : '↓'}</button>`;
+    return `<div id="cied">${g
+      .map(
+        (gr, gi) => `<div class="ced-g">
+        <div class="ced-gh"><input class="grow ced-gname" data-d="groups.${gi}.name" value="${esc(gr.name)}" aria-label="Group name">
+          ${mv('cedMoveG', gi, 0, -1, gi === 0)}${mv('cedMoveG', gi, 0, 1, gi === g.length - 1)}
+          <button type="button" class="btn ghost sm icon-only" data-a="cedDelG" data-g="${gi}" aria-label="Delete group">${icon('trash', 14)}</button></div>
+        ${gr.items
+          .map((it, ii) => {
+            const p = `groups.${gi}.items.${ii}`;
+            const needsOpts = it.type === 'choice' || it.type === 'pills';
+            const opts = Array.isArray(it.options) ? it.options.join(', ') : it.options || '';
+            return `<div class="ced-i">
+              <div class="ced-row"><input class="grow" data-d="${p}.label" value="${esc(it.label)}" placeholder="Item name" aria-label="Item name">
+                ${mv('cedMove', gi, ii, -1, ii === 0)}${mv('cedMove', gi, ii, 1, ii === gr.items.length - 1)}
+                <button type="button" class="btn ghost sm icon-only" data-a="cedDel" data-g="${gi}" data-i="${ii}" aria-label="Delete item">${icon('trash', 14)}</button></div>
+              <div class="ced-row wrap">${sel(p + '.type', S.CI_TYPES, it.type, true)}${sel(p + '.area', S.CI_AREAS, it.area || 'none')}
+                ${TARGET_HINT[it.type] ? `<label class="ced-t"><span class="dim small">${TARGET_HINT[it.type]}</span><input type="${it.type === 'time' ? 'time' : 'number'}" data-d="${p}.target" value="${esc(it.target ?? '')}" placeholder="${it.type === 'pills' ? 'all' : it.type === 'time' ? '' : 'any'}"></label>` : ''}
+                ${it.auto ? `<span class="chip" style="--c:var(--p1)">Fills from Doors</span>` : ''}</div>
+              ${needsOpts ? `<input data-d="${p}.options" value="${esc(opts)}" placeholder="Options, separated by commas">` : ''}
+            </div>`;
+          })
+          .join('')}
+        <button type="button" class="btn ghost sm" data-a="cedAdd" data-g="${gi}">${icon('plus', 13)}<span>Add item</span></button>
+      </div>`
+      )
+      .join('')}
+      <div class="btn-row"><button type="button" class="btn sm" data-a="cedAddG">${icon('plus', 13)}<span>Add group</span></button>
+        <button type="button" class="btn ghost sm" data-a="cedReset">Reset to default</button></div>
+      <p class="dim small">Removing an item hides it from now on. What you logged before is kept. "Doesn't count" items are saved but don't affect streaks or levels.</p>
+    </div>`;
+  };
+  NS.refreshCiEditor = () => {
+    const el = document.getElementById('cied');
+    if (el) el.outerHTML = NS.ciEditor();
+  };
+  A.ciEdit = () => {
+    ui.draft = NS.clone(S.ciConfig());
+    const original = NS.clone(S.ciConfig());
+    NS.openModal({
+      title: 'Edit check-in',
+      wide: true,
+      body: NS.ciEditor(),
+      onSave: () => {
+        const cfg = ui.draft;
+        cfg.groups = cfg.groups.filter((g) => g.name.trim() || g.items.length);
+        for (const g of cfg.groups) {
+          g.name = g.name.trim() || 'Untitled';
+          g.items = g.items.filter((it) => it.label.trim());
+          g.items.forEach((it) => {
+            it.label = it.label.trim();
+            if (typeof it.options === 'string') it.options = it.options.split(',').map((s) => s.trim()).filter(Boolean);
+            if ((it.type === 'choice' || it.type === 'pills') && !(it.options || []).length) it.options = ['Yes'];
+            if (it.target === '' || it.target == null) delete it.target;
+            else if (it.type !== 'time') it.target = Number(it.target);
+            const was = original.groups.flatMap((x) => x.items).find((o) => o.id === it.id);
+            if (!was || was.label !== it.label || was.target !== it.target) delete it.metricLabel;
+          });
+        }
+        S.state.settings.checkin = cfg;
+      },
+    });
+  };
+  const cedItems = (el) => ui.draft.groups[+el.dataset.g].items;
+  const swap = (arr, i, j) => { if (j >= 0 && j < arr.length) [arr[i], arr[j]] = [arr[j], arr[i]]; };
+  A.cedAdd = (el) => {
+    cedItems(el).push({ id: 'ci_' + NS.uid(), label: '', type: 'toggle', area: 'health' });
+    NS.refreshCiEditor();
+    const inputs = document.querySelectorAll(`#cied [data-d^="groups.${el.dataset.g}.items."][data-d$=".label"]`);
+    inputs.length && inputs[inputs.length - 1].focus();
+  };
+  A.cedDel = (el) => { cedItems(el).splice(+el.dataset.i, 1); NS.refreshCiEditor(); };
+  A.cedMove = (el) => { const it = cedItems(el); swap(it, +el.dataset.i, +el.dataset.i + Number(el.dataset.v)); NS.refreshCiEditor(); };
+  A.cedAddG = () => { ui.draft.groups.push({ id: 'g_' + NS.uid(), name: '', items: [] }); NS.refreshCiEditor(); };
+  A.cedDelG = (el) => {
+    if (!el.dataset.armed) { el.dataset.armed = '1'; el.classList.add('danger'); NS.toast('Tap again to delete the group and its items'); return; }
+    ui.draft.groups.splice(+el.dataset.g, 1);
+    NS.refreshCiEditor();
+  };
+  A.cedMoveG = (el) => { swap(ui.draft.groups, +el.dataset.g, +el.dataset.g + Number(el.dataset.v)); NS.refreshCiEditor(); };
+  A.cedReset = () => { ui.draft = S.defaultCheckin(); NS.refreshCiEditor(); NS.toast('Defaults restored. Save to keep them.'); };
 
   // =====================================================================
   // GEAR WISHLIST
